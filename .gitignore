@@ -1,0 +1,12 @@
+.DS_Store
+*.dep
+*.pdf
+*.log
+*.md5
+*.dpth
+*.aux
+*.auxlock
+*.bbl
+*.blg
+*.out
+*.gz
