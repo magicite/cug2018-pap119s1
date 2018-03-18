@@ -437,10 +437,130 @@ Filesystems \& I/O, DataWarp, SSD
 aaa citation~\cite{dw_user_guide} 
 
 \section{Implementation}
-Reference existing architecture paper so as not to repeat material~\cite{cug_arch}.
+DataWarp Transparent Cache functionality extends existing DataWarp infrastructure~\cite{cug_arch}.  With existing DataWarp, users request its functionality with \texttt{\#DW} directives placed alongside workload manager directives in batch job script files.  By the time the job script is executing, the allocated compute environment has been configured to access the requested SSD-backed DataWarp functionality.  By tailoring the hardware and software environment optimal to the job's needs, IO performance is improved and job execution time is reduced.
+
+The configuration steps performed depend on what the user has requested.  Those steps may involve creating a storage allocation across many DataWarp nodes, instantiating a new DataWarp scratch filesystem, allocating swap files, or transferring data from the primary parallel filesystem to the DataWarp scratch filesystem.  Just after compute node allocation but before batch job script execution the filesystem or swap files are made accessible to the job's compute nodes.
+
+For the most part, cleaning up happens in reverse.  Filesystem mounts and swap files are removed from the compute nodes.  Important data is copied from the DataWarp scratch filesystem to the parallel filesystem.  The storage allocation is removed and the SSD space is immediately available to new users.
+
+Users can request a DataWarp transparent cache to transparently and automatically accelerate IO to a parallel filesystem.  This is in contrast to DataWarp scratch allocations which requires users to manage all data exchange between it and a parallel filesystem.  A workload manager and the DataWarp Service software work together to orchestrate the setup and teardown required for the transparent cache data path.
+
 \subsection{User Interface}
-\subsection{Orchestration}
+
+The primary way users interact with all variants of DataWarp is through \texttt{\#DW} batch job script directives placed alongside other workload manager directives for compute resources, and environment variables injected in to the batch job script execution process.  For transparent cache, the \texttt{\#DW~jobdw} command is extended to allow users to request it.  There are four mandatory parameters:
+\begin{enumerate}
+\item \textbf{type=cache} Requests a transparent caching environment
+\item \textbf{access\_mode=striped} Requests files be striped across the entire DataWarp allocation
+\item \textbf{capacity=100TiB} Specifies the minimum size of the buffer (100TiB in this example)
+\item \textbf{pfs=/pfs/path} Specifies which parallel filesystem path DataWarp will transparently accelerate (\texttt{/pfs/path} in this example)
+\end{enumerate}
+When the batch job script executes, rather than access files under \texttt{/pfs/path}, applications can access the same files at the path defined in \texttt{\$DW\_JOB\_STRIPED\_CACHE} and the DataWarp transparent cache will work to accelerate IO operations.
+
+The \texttt{access\_mode=striped} combination can take two additional configuration options.  These are specified enclosed in parenthesis and appended to the end:
+\begin{enumerate}
+\item \textbf{MFS=1GiB} Maximum File Size (1GiB in this example)
+\item \textbf{client\_cache} Request use of DVS client-side caching on compute nodes when using transparent caching~\cite{dvs_client_cache}
+\end{enumerate}
+
+The Maximum File Size configuration option is for helping stop errant IO activity.  Since some of the hardware used by DataWarp are SSDs, and SSDs have a limited write capacity, DataWarp allows users to specify what types of IO activity may signify unintentional excessive usage.  For transparent caching, a user may additionally specify two optional parameters to control how much data can be written to the SSDs in any length of time.
+\begin{enumerate}
+\item \textbf{write\_window\_multiplier=5} Multiplier on capacity for amount allowed to be written (5 in this example)
+\item \textbf{write\_window\_length=43200} Number of seconds before a write is no longer considered in calculating excessive usage (43200, or half a day, in this example)
+\end{enumerate}
+By default, if a user does not specify these two parameters, their job is limited to 10 times the allocation size in writes per 86,400 seconds (1 day).
+
+An example Slurm batch job script with no DataWarp integration can be seen in \figurename~\ref{slurm_job_example}.  This basic job script shows an \texttt{a.out} that uses the path specified at \texttt{\$JOBDIR} for IO performed during the job.  In \figurename~\ref{tc_job_example}, the script has been modified to request a 100TiB transparent cache of the parallel filesystem \texttt{/lus/global}.  The path specified at \texttt{\$JOBDIR} has been altered to specify use of the transparent cache.  When \texttt{a.out} now runs, its IO now passes through the transparent cache rather than straight to lustre.  After either job script executes, the contents of \texttt{/lus/global/my\_jobdir} are the same.  \figurename~\ref{tc_job_example_knobby} shows an example with the optional settings supplied, and using \texttt{\#DW} line continuation support.
+
+\begin{figure*}
+\small
+\begin{verbatim}
+#!/bin/bash
+#SBATCH --ntasks 3200
+
+export JOBDIR=/lus/global/my_jobdir
+srun -n 3200 a.out
+\end{verbatim}
+\caption{Example Slurm job script with no DataWarp integration.  \texttt{\$JOBDIR} points to a path on lustre, so \texttt{a.out}'s IO interacts with lustre directly\label{slurm_job_example}}
+\end{figure*}
+
+\begin{figure*}
+\small
+\begin{verbatim}
+#!/bin/sh
+#SBATCH --ntasks 3200
+#DW jobdw type=cache access_mode=striped pfs=/lus/global capacity=100TiB
+
+export JOBDIR=$DW_JOB_STRIPED_CACHE/my_jobdir
+srun -n 3200 a.out
+\end{verbatim}
+\caption{Example Slurm job script requesting access to a 100TiB transparent cache of \texttt{/lus/global}.  \texttt{\$JOBDIR} now points to \texttt{\$DW\_JOB\_STRIPED\_CACHE/my\_jobdir}.  While to \texttt{a.out} the same files are opened, read, or written as in \figurename~\ref{slurm_job_example}, the IO is actually intercepted by the DataWarp transparent cache.\label{tc_job_example}}
+\end{figure*}
+
+\begin{figure*}
+\small
+\begin{verbatim}
+#!/bin/sh
+#SBATCH --ntasks 3200
+#DW jobdw type=cache access_mode=striped(MFS=10GiB,client_cache) pfs=/lus/global capacity=100TiB \
+#DW       write_window_multiplier=5 write_window_length=43200
+
+export JOBDIR=$DW_JOB_STRIPED_CACHE/my_jobdir
+srun -n 3200 a.out
+\end{verbatim}
+\caption{Example Slurm job script requesting transparent caching with many optional settings.\label{tc_job_example_knobby}}
+\end{figure*}
+
+While each workload manager with DataWarp support includes its own interface for showing users current DataWarp state, the DataWarp service includes the command \texttt{dwstat} for showing current state.  For transparent cache, the \texttt{dwstat configurations} endpoint includes additional entries for each transparent caching setup.  See \figurename~\ref{dwstat_config_cd} for an example.  The primary column of interest is \texttt{backing\_path}, which displays the parallel filesystem path that the transparent cache configuration will work with.  Other information, such as the size and location of the allocations, are found in other unmodified \texttt{dwstat} endpoints like \texttt{dwstat instances}.
+
+\begin{figure*}
+\small
+\begin{verbatim}
+user@host:~> dwstat configurations --cd
+conf state inst  type  amode activs backing_path
+1775 CA--- 1787 cache stripe      1 /lus/snx12345
+1776 CA--- 1788 cache stripe      1 /lus/global
+1777 CA--- 1789 cache stripe      1 /lus/snx12345/alice
+\end{verbatim}
+\caption{\texttt{dwstat configurations} output.  The \texttt{--cd} option shows additional details on each of the transparent cache configurations.  Three transparent cache configurations are viewable to the user, and each is transparently caching different paths.\label{dwstat_config_cd}}
+\end{figure*}
+
+The DataWarp service includes a separate command, \texttt{dwcli}, to allow administrators to modify DataWarp setup and manually create DataWarp environments.  For transparent caching, this type of configuration can be requested.  The same options that a user normally specifies with \texttt{\#DW} directives in batch job scripts appear as options to \texttt{dwcli}.  See \figurename~\ref{dwcli_create_config} for an example that creates a transparent cache configuration on top of the existing instance \texttt{\$instance}.
+
+\begin{figure*}
+\small
+\begin{verbatim}
+user@host:~> dwcli create configuration --instance $instance \
+               --type cache --access-mode stripe --backing-path /lus/snx12345
+create request for configurations entity with id = 1776 accepted, "dwstat configurations" for status
+\end{verbatim}
+\caption{Creating a transparent cache configuration with \texttt{dwcli}.  Transparent cache configurations are linked with an instance, which is an allocation of space.  Instances are linked with a session, which can be though of as a user.\label{dwcli_create_config}}
+\end{figure*}
+
+*** RESTful API.
+
 \subsection{Data Path}
+
+The transparent caching data path is similar to the scratch data path.  The primary difference is in the introduction of a new filesystem, dcfs or data caching filesystem.  The dcfs manages the contents of a buffer placed between a filesystem and a user of that filesystem.  Whereas in the scratch data path the dwfs or DataWarp filesystem writes files to an SSD-backed XFS filesystem, in the transparent cache data path dwfs writes files to the dcfs filesystem.  The transparent caching data path is covered in depth by~\cite{cug_tc_fs}, so only an overview will be presented here.
+
+On the hardware front, DataWarp server nodes are co-located with compute nodes in Cray XC cabinets.  Compute nodes and DataWarp server nodes are both directly attached to the Aries-based high speed network (HSN).  On the DataWarp server nodes are SSDs with an aggregate bandwidth capacity that matches the capabilities of the Aries NIC.  For a filesystem external to the HSN such as the lustre-based ClusterStor, additional nodes known as LNet router nodes, which are attached to both the Aries HSN and storage network, move IO traffic between lustre clients on the HSN and the external filesystem.
+
+The XFS, dcfs, dwfs, and DVS server reside on DataWarp server nodes.  The dcfs automatically manages file cache data on an XFS filesystem placed on an LVM logical volume striped over the local SSDs.  The dcfs manages files in 1MiB segments internally called extents.  Currently, both cache eviction and dirty data write-back algorithms are file-based LRU.  When dcfs processes a \texttt{read()} request, it first sees if the extents are in the cache.  For any cache misses, dcfs performs a copy-up for these extents from the PFS in to the cache.  Once all extents are in the cache, the data requested by the \texttt{read()} is returned.  Processing of a \texttt{write()} is similar, as writes go through a read-modify-write cycle, except for extents wholly overwritten.  Cache eviction and write-back take place automatically after a high watermark threshold of data or dirty data, respectively, is exceeded, and continue until a low watermark threshold is met.  Copy-up may trigger eviction, and eviction may trigger copy-up.  Actual writes to the XFS filesystem, either through a copy-up or \texttt{write()} operation, are tabulated and used to detect potential unintentional excessive usage.
+
+The dwfs manages all inter-node communication between the DataWarp servers involved in a configured transparent caching environment.  The grouping of dwfs are called a realm.  Within the realm are one or more namespaces.  Each namespace is comprised of a namespace tree, where file metadata resides, and one or more namespace data repositories, where data objects reside.  For the transparent caching striped access mode, there are as many namespaces as there are DataWarp servers in the realm.  Each server has a namespace tree, and each namespace has a namespace data repository on all of the DataWarp servers in the realm.  This setup allows for all files accessed in the transparent caching environment to be striped across all DataWarp servers in the realm, and for each DataWarp server in the realm to service metadata operations.  Since for transparent caching the namespace tree is actually a bind mount of a parallel file system mount, metadata performance is generally no better as compared to access through the parallel filesystem directly.  As an example of inter-node communication dwfs performs, since some data may be in DataWarp and not on the PFS, some metadata in the PFS is stale.  The dwfs intercepts user requests like \texttt{stat()} and calculates answers taking the contents of the namespace data repositories in to consideration.  Another example is in forwarding user \texttt{unlink()} requests to all DataWarp servers containing stripes of a file.
+
+The Data Virtualization Service (DVS) has a presence on both DataWarp servers and compute nodes.  In short, DVS mounts on compute nodes forward IO requests from user applications over to DVS servers located on DataWarp servers.  For DataWarp environments, DVS acts less as a generic IO forwarder and more as a DataWarp filesystem client.  DVS understands the dwfs namespace tree and namespace data repository layout and accesses them accordingly.  IO requests for the same file, or the same stripe of a file, are always forwarded to the same server.  Different files or different stripes of the same file may be forwarded to other servers.  This determinism comes from selecting servers based on a hash of each file's inode number.
+
+\subsection{Orchestration}
+
+The orchestration layers of DataWarp involve a workload manager (WLM), such as Moab/TORQUE, PBS, or Slurm, and the DataWarp Service (DWS).  These components work together to offer policies regarding DataWarp usage, set up the user requested data path, and migrate data between the parallel filesystem and DataWarp storage.
+
+For transparent cache, no additional support is required from a WLM that already supports DataWarp with scratch configurations.  This is because the WLM's interest involves the capacity portion of a user's request and not the way in which the capacity is to be configured.  This intentional separation between DataWarp and WLM allows for new data paths to be introduced in to DataWarp with less work and coordination.  Similarly, the environment variable needed by users to locate the transparent cache mount is supplied to the WLM in the same way as the scratch environment variables.
+
+The DWS has three main responsibilities for transparent cache.  The timing of each specific step is controlled by callouts from the WLM.  The first of these is the set up of the transparent cache data path.  When setting up the data path, sub-steps tend to be blocked from starting on any node until prior sub-steps have completed on all nodes, e.g., mount points on compute nodes are not created until all servers have been successfully configured.  As with scratch, transparent cache environments are built upon DataWarp instances, which are allocations of SSD space across one or more DataWarp servers.  On each allocation fragment, the DWS makes an XFS filesystem.  This is used by the DataWarp filesystem components, dcfs and dwfs, to store file data.  The DWS creates the dcfs mount points and specifies the XFS mount as the device and the user-requested PFS path as a mount option.  The DWS then creates a dwfs mount point and specifies the dcfs mount as the device, and the list of other servers in the allocation as a mount option.  The last step on each of the DataWarp servers is to create a namespace that is configured to span each server in the allocation.  The metadata directory specified at namespace creation time is a bind mount of the parallel filesystem directory which means many metadata operations actually rely on the PFS directly.  The DWS sets up the namespace via a library call that sends an \texttt{ioctl()} to dwfs.  In the final step for setup, the DWS makes a DVS mount on the nodes communicated to it by the WLM, i.e., the batch job's compute nodes.  At mount time, the device is supplied as the path corresponding to the remote nodes' namespace metadata directory, and the remote nodes in the instance are supplied as well.
+
+The second responsibility the DWS has for transparent cache is managing dirty data in the cache prior to teardown.  Generally, any dirty data in the transparent cache environment should be allowed to be written back to the PFS prior to teardown taking place.  This is the default behavior.  There are cases where the dirty data may not need to be preserved, such as a failure in the compute job or a permanent partial failure of the DataWarp instance.  As with scratch, when there is interest in saving dirty data, the DWS will not allow the data path to be completely torn down until it has confirmation from it that the result data has been successfully preserved.  For transparent cache, prior to removing a dwfs namespace the DWS will call in to the filesystem using an \texttt{ioctl()} designed to both initiate write-back of any dirty data and block returning until success or error.  On error, the message is logged and the operation retried after a short period of time.
+
+The third responsibility the DWS has for transparent cache is teardown of the data path.  Generally, teardown takes place in reverse order from that of setup.  The DVS mount points on all compute nodes are unmounted first.  Then, the previously mentioned dirty data management step takes place.  It is crucial that the DVS mount points were removed first because dirty data could have been in a DVS client-side cache, or in transit between the compute nodes and DataWarp nodes.  After all dirty data has been written back to the PFS or the DWS has been instructed to skip this step, server teardown steps take place.  The DWS removes the namespaces on each server via a library call that sends an \texttt{ioctl()} to dwfs.  It then removes the bind mount of the PFS used during namespace setup.  The DWS then unmounts the dwfs, dcfs, and XFS filesystems, in that order.  The DWS then performs instance removal steps as it does with the scratch filesystem.
 
 \section{Challenges}
 \begin{itemize}
