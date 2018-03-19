@@ -443,7 +443,7 @@ The configuration steps performed depend on what the user has requested.  Those 
 
 For the most part, cleaning up happens in reverse.  Filesystem mounts and swap files are removed from the compute nodes.  Important data is copied from the DataWarp scratch filesystem to the parallel filesystem.  The storage allocation is removed and the SSD space is immediately available to new users.
 
-Users can request a DataWarp transparent cache to transparently and automatically accelerate IO to a parallel filesystem.  This is in contrast to DataWarp scratch allocations which requires users to manage all data exchange between it and a parallel filesystem.  A workload manager and the DataWarp Service software work together to orchestrate the setup and teardown required for the transparent cache data path.
+Users can request a DataWarp transparent cache to transparently and automatically accelerate IO to a parallel filesystem.  This is in contrast to DataWarp scratch allocations which requires users to manage all data exchange between it and a parallel filesystem.  A workload manager and the DataWarp Service (DWS) software work together to orchestrate the setup and teardown required for the transparent cache data path.
 
 \subsection{User Interface}
 
@@ -510,7 +510,7 @@ srun -n 3200 a.out
 \caption{Example Slurm job script requesting transparent caching with many optional settings.\label{tc_job_example_knobby}}
 \end{figure*}
 
-While each workload manager with DataWarp support includes its own interface for showing users current DataWarp state, the DataWarp service includes the command \texttt{dwstat} for showing current state.  For transparent cache, the \texttt{dwstat configurations} endpoint includes additional entries for each transparent caching setup.  See \figurename~\ref{dwstat_config_cd} for an example.  The primary column of interest is \texttt{backing\_path}, which displays the parallel filesystem path that the transparent cache configuration will work with.  Other information, such as the size and location of the allocations, are found in other unmodified \texttt{dwstat} endpoints like \texttt{dwstat instances}.
+While each workload manager with DataWarp support includes its own interface for showing users current DataWarp state, the DWS includes the command \texttt{dwstat} for showing current state.  For transparent cache, the \texttt{dwstat configurations} endpoint includes additional entries for each transparent caching setup.  See \figurename~\ref{dwstat_config_cd} for an example.  The primary column of interest is \texttt{backing\_path}, which displays the parallel filesystem path that the transparent cache configuration will work with.  Other information, such as the size and location of the allocations, are found in other unmodified \texttt{dwstat} endpoints like \texttt{dwstat instances}.
 
 \begin{figure*}
 \small
@@ -524,7 +524,7 @@ conf state inst  type  amode activs backing_path
 \caption{\texttt{dwstat configurations} output.  The \texttt{--cd} option shows additional details on each of the transparent cache configurations.  Three transparent cache configurations are viewable to the user, and each is transparently caching different paths.\label{dwstat_config_cd}}
 \end{figure*}
 
-The DataWarp service includes a separate command, \texttt{dwcli}, to allow administrators to modify DataWarp setup and manually create DataWarp environments.  For transparent caching, this type of configuration can be requested.  The same options that a user normally specifies with \texttt{\#DW} directives in batch job scripts appear as options to \texttt{dwcli}.  See \figurename~\ref{dwcli_create_config} for an example that creates a transparent cache configuration on top of the existing instance \texttt{\$instance}.
+The DWS includes a separate command, \texttt{dwcli}, to allow administrators to modify DataWarp setup and manually create DataWarp environments.  For transparent caching, this type of configuration can be requested.  The same options that a user normally specifies with \texttt{\#DW} directives in batch job scripts appear as options to \texttt{dwcli}.  See \figurename~\ref{dwcli_create_config} for an example that creates a transparent cache configuration on top of the existing instance \texttt{\$instance}.
 
 \begin{figure*}
 \small
@@ -536,7 +536,7 @@ create request for configurations entity with id = 1776 accepted, "dwstat config
 \caption{Creating a transparent cache configuration with \texttt{dwcli}.  Transparent cache configurations are linked with an instance, which is an allocation of space.  Instances are linked with a session, which can be though of as a user.\label{dwcli_create_config}}
 \end{figure*}
 
-*** RESTful API.
+All operations performed by dwstat, dwcli, and available to users via \texttt{\#DW} directives are funneled through a RESTful API exposed by the DWS.  For transparent caching, the \texttt{/dw/v1/configurations/} endpoint has been augmented to support its new options, such as \texttt{backing\_path}.
 
 \subsection{Data Path}
 
@@ -563,26 +563,33 @@ The second responsibility the DWS has for transparent cache is managing dirty da
 The third responsibility the DWS has for transparent cache is teardown of the data path.  Generally, teardown takes place in reverse order from that of setup.  The DVS mount points on all compute nodes are unmounted first.  Then, the previously mentioned dirty data management step takes place.  It is crucial that the DVS mount points were removed first because dirty data could have been in a DVS client-side cache, or in transit between the compute nodes and DataWarp nodes.  After all dirty data has been written back to the PFS or the DWS has been instructed to skip this step, server teardown steps take place.  The DWS removes the namespaces on each server via a library call that sends an \texttt{ioctl()} to dwfs.  It then removes the bind mount of the PFS used during namespace setup.  The DWS then unmounts the dwfs, dcfs, and XFS filesystems, in that order.  The DWS then performs instance removal steps as it does with the scratch filesystem.
 
 \section{Challenges}
-\begin{itemize}
-\item first implementation
-\item security
-\item PFS bugs
-\item Metadata performance
-\item recovery
-\end{itemize}
 
+We faced a number of challenges in developing transparent caching.  Our first implementation of the data path did not re-use the dwfs component used in the scratch filesystem.  Instead, all the responsibilities of dwfs and dcfs were contained in a single filesystem layer, dwcfs or DataWarp Caching Filesystem.  This led to several problems such as higher maintenance costs and higher development costs.  By splitting the intra-node responsibilities (dcfs) from the inter-node responsibilities (dwfs) we were able to reduce both maintenance and development costs.  Having a more modular solution also reduced the learning curve associated with working on the implementation.
+
+Just prior to the first release of transparent caching we realized that the orchestration layer would allow users to transparently cache directories that filesystem permissions would otherwise suggest the user could not access.  For example, when interacting with a file path on a PFS, it is necessary to have execute permissions on all parent directories.  Since the orchestration layer originally allowed a user to supply any PFS path, and would then bind mount that path on to a dwfs namespace tree, the parent directory permissions were effectively ignored.  To handle this problem, administrators can now configure the DWS to be more restrictive when processing transparent cache configuration requests.
+
+Since the transparent cache data path relies on the PFS for metadata operations, it generally does not accelerate them.  Since these operations must route through DVS in addition to through the PFS, the extra overhead can even result in decreased metadata performance.  We are considering improvements to DVS to reduce this overhead.  Since the number of PFS clients in a transparent cache data path is the number of DataWarp servers rather than the number of compute nodes, it is possible to get better metadata performance.  For large jobs where the compute node count is larger than the number of DataWarp servers, the fewer PFS clients means less coordination is required overall.
+
+Throughout the course of development and testing we ran in to bugs that needed to be triaged and fixed.  What made this trickier was running in to PFS bugs.  In particular for lustre we found issues involving group lock functionality and open by handle functionality.  Collaborating with lustre experts was critical in understanding and making progress on these issues.
+
+Implementing recovery of transparent caching filesystems on server crash or reboot has also proven challenging, and is not present in the current implementation.  We have found bugs in how XFS manages sparse files that prevent us from using it during recovery.  While the bugs are fixed in newer Linux releases, the fixes are not easily back-ported to current CLE releases.
 
 \section{Early Experience}
 ddd
 
-\section{Futures}
-\begin{itemize}
-\item explicit cache control
-\item preload
-\item SSD write protection
-\item performance
-\item accounting
-\end{itemize}
+\section{Future Work}
+
+Load balance access mode is a transparent caching implementation meant to greatly accelerate read-only workloads.  While the old transparent caching implementation supported this access mode, the new implementation does not yet do so.  Rather than striping files across all DataWarp servers as in striped access mode, with load balance access mode files are duplicated on each DataWarp server.  Then, each compute node forwards all IO requests to just one of the DataWarp nodes.  When many ranks all need to read the same file simultaneously, the full bandwidth from all servers is used immediately.
+
+While transparent caching does automatically copy up data from the PFS in to the transparent cache on demand, it can still be useful to preload the cache before a batch job starts.  This is similar to the scratch data path environment, where files can be staged (copied) on to the SSDs prior to when a batch job script executes.  For batch job scripts that start out reading a large input file such as a checkpoint or database, copying up the file in to the cache beforehand is beneficial.  We envision this as new batch job script directive, \texttt{\#DW preload}.
+
+Similarly, while transparent caching does automatically manage the contents of the cache, if given hints by a user it can perform better.  By allowing users to explicitly request copy-up, eviction, write-back, or invalidation, the cache hit ratio can be improved and batch job execution time can be decreased.
+
+The thresholds used by the current transparent caching eviction and write-back algorithms are preliminary and not optimal for all batch jobs.  With more experience and empirical data, we will change these thresholds to be better for jobs on average, and allow for per-job configuration of these values.
+
+The old transparent caching implementation exposed statistics or accounting data via a C library API, but the new implementation does not expose this information.  The data is useful in seeing how effectively the transparent cache operated, such as seeing the cache hit ratio.  The information can be used to inform increasing or decreasing the size of the transparent cache environment.
+
+The default behavior for \texttt{close()} and \texttt{fsync()}-like operations in transparent caching is to sync all dirty data to the SSDs.  Allowing this behavior to be configurable, e.g., so that all dirty data is guaranteed to have been written to the PFS on successful completion, will allow for users to choose between speed of operation and having a simple method for guaranteeing durability of data.
 
 \section{Conclusion}
 eee
