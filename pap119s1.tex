@@ -68,7 +68,7 @@
 %    pdffitwindow=false,     % window fit to page when opened
 %    pdfstartview={FitH},    % fits the width of the page to the window
     pdftitle={DataWarp Transparent Cache: Implementation, Challenges, and Early Experience},    % title
-    pdfauthor={David Paul, Benjamin Landsteiner},     % author
+    pdfauthor={Benjamin Landsteiner, David Paul},     % author
     pdfsubject={DataWarp},   % subject of the document
 %    pdfcreator={Creator},   % creator of the document
 %    pdfproducer={Producer}, % producer of the document
@@ -394,13 +394,12 @@ basicstyle=\ttfamily,
 % compsoc conferences compared to traditional conferences), use this
 % alternative format:
 % 
-\author{\IEEEauthorblockN{David Paul\IEEEauthorrefmark{1}, 
-Benjamin Landsteiner\IEEEauthorrefmark{2}}
-\IEEEauthorblockA{\IEEEauthorrefmark{1}Lawrence Berkeley National Laboratory\\
+\author{\IEEEauthorblockN{Benjamin Landsteiner\IEEEauthorrefmark{1}, David Paul\IEEEauthorrefmark{2}}
+\IEEEauthorblockA{\IEEEauthorrefmark{1}Cray Inc., Bloomington, MN  55425\\
+Email: ben@cray.com}
+\IEEEauthorblockA{\IEEEauthorrefmark{2}Lawrence Berkeley National Laboratory\\
 National Energy Research Scientific Computing Center, Berkeley, CA  94720\\
-Email: dpaul@lbl.gov}
-\IEEEauthorblockA{\IEEEauthorrefmark{2}Cray Inc., Bloomington, MN  55425\\
-Email: ben@cray.com}}
+Email: dpaul@lbl.gov}}
 
 
 
@@ -417,7 +416,7 @@ Email: ben@cray.com}}
 % As a general rule, do not put math, special symbols or citations
 % in the abstract
 \begin{abstract}
-DataWarp accelerates performance by making use of fast SSDs layered between a parallel file system (PFS) and applications. Transparent caching functionality provides a new way to accelerate application performance. By configuring the SSDs as a transparent cache to the PFS, DataWarp enables improved application performance without requiring users to manually manage the copying of their data between the PFS and DataWarp. We provide an overview of the implementation to show how easy it is to get started. We then cover some of the challenges encountered during implementation.  We discuss our early experience on large systems and share performance collected from NERSC's Cori supercomputer.  We also discuss future work opportunities.
+DataWarp accelerates performance by making use of fast SSDs layered between a parallel file system (PFS) and applications. Transparent caching functionality provides a new way to accelerate application performance. By configuring the SSDs as a transparent cache to the PFS, DataWarp enables improved application performance without requiring users to manually manage the copying of their data between the PFS and DataWarp. We provide an overview of the implementation to show how easy it is to get started. We then cover some of the challenges encountered during implementation.  We discuss our early experience on Cray development systems and on NERSC's Gerty supercomputer.  We also discuss future work opportunities.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -553,7 +552,7 @@ All operations performed by \texttt{dwstat}, \texttt{dwcli}, and available to us
 
 \subsection{Data Path}
 
-The transparent caching data path is similar to the scratch data path.  The primary difference is in the introduction of a new filesystem, \texttt{dcfs} or data caching filesystem.  The \texttt{dcfs} manages the contents of a buffer placed between a filesystem and a user of that filesystem.  Whereas in the scratch data path the \texttt{dwfs} or DataWarp filesystem writes files to an SSD-backed XFS filesystem, in the transparent cache data path \texttt{dwfs} writes files to the \texttt{dcfs} filesystem.  The transparent caching data path is covered in depth by "DataWarp Transparent Caching Implementation, CUG2018 - Richardson~\cite{cug_tc_fs}, so only an overview will be presented here.  A visual overview of the transparent cache data path can be seen in \figurename~\ref{tcdp}.
+The transparent caching data path is similar to the scratch data path.  The primary difference is in the introduction of a new filesystem, \texttt{dcfs} or data caching filesystem.  The \texttt{dcfs} manages the contents of a buffer placed between a filesystem and a user of that filesystem.  Whereas in the scratch data path the \texttt{dwfs} or DataWarp filesystem writes files to an SSD-backed XFS filesystem, in the transparent cache data path \texttt{dwfs} writes files to the \texttt{dcfs} filesystem.  The transparent caching data path is covered in depth elsewhere, so only an overview will be presented here~\cite{cug_tc_fs}.  A visual overview of the transparent cache data path can be seen in \figurename~\ref{tcdp}.
 
 \begin{figure*}
 \centering
@@ -563,17 +562,17 @@ The transparent caching data path is similar to the scratch data path.  The prim
 
 On the hardware front, DataWarp server nodes are co-located with compute nodes in Cray XC cabinets.  Compute nodes and DataWarp server nodes are both directly attached to the Aries-based high speed network (HSN).  On the DataWarp server nodes are SSDs with an aggregate bandwidth capacity that matches the capabilities of the Aries NIC.  For a filesystem external to the HSN such as the lustre-based ClusterStor, additional nodes known as LNet router nodes, which are attached to both the Aries HSN and storage network, move IO traffic between lustre clients on the HSN and the external filesystem.
 
-The \texttt{XFS}, \texttt{dcfs}, \texttt{dwfs}, and \texttt{DVS} server reside on DataWarp server nodes.  The \texttt{dcfs} automatically manages file cache data on an \texttt{XFS} filesystem placed on an LVM logical volume striped over the local SSDs.  The \texttt{dcfs} manages files in 1MiB segments internally called extents.  Currently, both cache eviction and dirty data write-back algorithms are file-based LRU (least recently used).  When \texttt{dcfs} processes a \texttt{read()} request, it first sees if the extents are in the cache.  For any cache misses, \texttt{dcfs} performs a copy-up for these extents from the PFS in to the cache.  Once all extents are in the cache, the data requested by the \texttt{read()} is returned.  Processing of a \texttt{write()} is similar, as writes go through a read-modify-write cycle, except for extents wholly overwritten.  Cache eviction and write-back take place automatically after a high watermark threshold of data or dirty data, respectively, is exceeded, and continue until a low watermark threshold is met.  Copy-up may trigger eviction, and eviction may trigger write-back.  Actual writes to the \texttt{XFS} filesystem, either through a copy-up or \texttt{write()} operation, are tabulated and used to detect potential unintentional excessive usage.
+The \texttt{XFS}, \texttt{dcfs}, \texttt{dwfs}, and \texttt{DVS} server reside on DataWarp server nodes.  The \texttt{dcfs} automatically manages file cache data on an \texttt{XFS} filesystem placed on an LVM logical volume striped over the local SSDs.  The \texttt{dcfs} manages files in 1MiB segments internally called extents.  Currently, both cache eviction and dirty data write-back algorithms are file-based LRU (least recently used) and can be configured to use multiple threads.  When \texttt{dcfs} processes a \texttt{read()} request, it first sees if the extents are in the cache.  For any cache misses, \texttt{dcfs} performs a copy-up for these extents from the PFS in to the cache.  Once all extents are in the cache, the data requested by the \texttt{read()} is returned.  Processing of a \texttt{write()} is similar, as writes go through a read-modify-write cycle, except for extents wholly overwritten.  Cache eviction and write-back take place automatically after a high watermark threshold of data or dirty data, respectively, is exceeded, and continue until a low watermark threshold is met.  Copy-up may trigger eviction, and eviction may trigger write-back.  Actual writes to the \texttt{XFS} filesystem, either through a copy-up or \texttt{write()} operation, are tabulated and used to detect potential unintentional excessive usage.
 
 The \texttt{dwfs} manages all inter-node communication between the DataWarp servers involved in a configured transparent caching environment.  The grouping of \texttt{dwfs} are called a realm.  Within the realm are one or more namespaces.  Each namespace is comprised of a namespace tree, where file metadata resides, and one or more namespace data repositories, where data objects reside.  For the transparent caching striped access mode, there are as many namespaces as there are DataWarp servers in the realm.  Each server has a namespace tree, and each namespace has a namespace data repository on all of the DataWarp servers in the realm.  This setup allows for all files accessed in the transparent caching environment to be striped across all DataWarp servers in the realm, and for each DataWarp server in the realm to service metadata operations.  Since for transparent caching the namespace tree is actually a bind mount of a parallel file system mount, metadata performance is generally no better as compared to access through the parallel filesystem directly.  As an example of inter-node communication \texttt{dwfs} performs, since some data may be in DataWarp and not on the PFS, some metadata in the PFS is stale.  The \texttt{dwfs} intercepts user requests like \texttt{stat()} and calculates answers taking the contents of the namespace data repositories in to consideration.  Another example is in forwarding user \texttt{unlink()} requests to all DataWarp servers containing stripes of a file.
 
-The Data Virtualization Service (DVS) has a presence on both DataWarp servers and compute nodes.  In short, DVS mounts on compute nodes forward IO requests from user applications over to DVS servers located on DataWarp servers.  For DataWarp environments, DVS acts less as a generic IO forwarder and more as a DataWarp filesystem client.  DVS understands the \texttt{dwfs} namespace tree and namespace data repository layout and accesses them accordingly.  IO requests for the same file, or the same stripe of a file, are always forwarded to the same server.  Different files or different stripes of the same file may be forwarded to other servers.  This determinism comes from selecting servers based on a hash of each file's inode number.
+The Data Virtualization Service (DVS) has a presence on both DataWarp servers and compute nodes.  In short, DVS mounts on compute nodes forward IO requests from user applications over to DVS servers located on DataWarp server nodes.  For DataWarp environments, DVS acts less as a generic IO forwarder and more as a DataWarp filesystem client.  DVS understands the \texttt{dwfs} namespace tree and namespace data repository layout and accesses them accordingly.  IO requests for the same file, or the same stripe of a file, are always forwarded to the same server.  Different files or different stripes of the same file may be forwarded to other servers.  This determinism comes from selecting servers based on a hash of each file's inode number.
 
 \subsection{Orchestration}
 
 The orchestration layers of DataWarp involve a workload manager (WLM), such as Moab/TORQUE, PBS, or Slurm, and the DataWarp Service (DWS).  These components work together to offer policies regarding DataWarp usage, set up the user requested data path, migrate data between the parallel filesystem and DataWarp storage, and clean up the user requested data path.
 
-A visual overview of the components involved in DataWarp orchestration can be seen in \figurename~\ref{orchestration}.  WLMs interact with DataWarp through the \texttt{dw\_wlm\_cli} command line client, supplying job context with each invocation.  The \texttt{dw\_wlm\_cli} parses the supplied job script's \texttt{\#DW} lines and sends requests to the DWS via a RESTful API located on a DataWarp API Gateway Node.  The \texttt{dwstat} and \texttt{dwcli} command line clients are for showing status and submitting state changes, respectively, and also interact with the RESTful API.  The RESTful API itself is implemented in the combination of the \texttt{nginx} web server and \texttt{dwrest} client.  \texttt{dwrest} directs valid requests to \texttt{dwsd}, or DataWarp Scheduler Daemon, which persists state to a local SQLite database.  Based on what a user has requested, which DataWarp servers are online, and other state, the \texttt{dwsd} will send a batch of requests to \texttt{dwmd} or DataWarp Manager Daemons located on the DataWarp server nodes.  Since the batch of requests may be for performing operations on tens of thousands of nodes, the \texttt{dwmd} uses a node health fanout daemon \texttt{xtnhd} to scalably execute them in parallel~\cite{cug_nh}.  The actual interactions with the data path, such as mounting, unmounting, or staging, happen via python scripts prefixed with \texttt{dws}, or just \texttt{dws*.py} collectively.  User authentication across TCP/IP is performed using \texttt{munge}.
+A visual overview of the components involved in DataWarp orchestration can be seen in \figurename~\ref{orchestration}.  WLMs interact with DataWarp through the \texttt{dw\_wlm\_cli} command line client, supplying job context with each invocation.  The \texttt{dw\_wlm\_cli} parses the supplied job script's \texttt{\#DW} lines and sends requests to the DWS via a RESTful API located on a DataWarp API Gateway Node.  The \texttt{dwstat} and \texttt{dwcli} command line clients are for showing status and submitting state changes, respectively, and also interact with the RESTful API.  The RESTful API itself is implemented in the combination of the \texttt{nginx} web server and \texttt{dwrest} client.  \texttt{dwrest} directs valid requests to \texttt{dwsd}, or DataWarp Scheduler Daemon, which persists state to a local SQLite database.  Based on what a user has requested, which DataWarp servers are online, and other state, the \texttt{dwsd} will send a batch of requests to \texttt{dwmd} or DataWarp Manager Daemons located on the DataWarp server nodes.  Since the batch of requests may be for performing operations on tens of thousands of nodes, the \texttt{dwmd} uses the node health fanout daemon \texttt{xtnhd} to scalably execute them in parallel~\cite{cug_nh}.  The actual interactions with the data path, such as mounting, unmounting, or staging, happen via python scripts prefixed with \texttt{dws}, or just \texttt{dws*.py} collectively.  User authentication across TCP/IP is performed using \texttt{munge}~\cite{munge_install}.
 
 \begin{figure*}
 \centering
@@ -597,19 +596,20 @@ Just prior to the first release of transparent caching we realized that the orch
 
 Since the transparent cache data path relies on the PFS for metadata operations, it generally does not accelerate them.  Since these operations must route through DVS in addition to through the PFS, the extra overhead can even result in decreased metadata performance.  We are considering improvements to DVS to reduce this overhead.  Since the number of PFS clients in a transparent cache data path is the number of DataWarp servers rather than the number of compute nodes, it is possible to get better metadata performance.  For large jobs where the compute node count is larger than the number of DataWarp servers, the fewer PFS clients means less coordination is required overall.
 
-Throughout the course of development and testing we ran in to bugs that needed to be triaged and fixed.  What made this trickier was running in to PFS bugs.  In particular for lustre we found issues involving group lock functionality and open by handle functionality (proof read this).  Collaborating with lustre experts was critical in understanding and making progress on these issues.
+Throughout the course of development and testing we ran in to bugs that needed to be triaged and fixed.  What made this trickier was running in to PFS bugs.  In particular for lustre we found issues involving group lock functionality and open by handle functionality.  Collaborating with lustre experts was critical in understanding and making progress on these issues.
 
 Implementing recovery of transparent caching filesystems on server crash or reboot has also proven challenging, and is not present in the current implementation.  We have found bugs in how XFS manages sparse files that prevent us from using it during recovery.  While the bugs are fixed in newer Linux releases, the fixes are not easily back-ported to current CLE releases.
 
 \section{Early Experience\label{sec_ee}}
 
+\subsection{NERSC}
 Implementation of Transparent Cache DataWarp (TC) for the NERSC user environment was of particular interest due to the wide range of user skill set and breadth of applications deployed on the XC40 (Cori).  DataWarp usage had been well accepted by users, was stable and performant.  It did however require a bit of forethought to determine input and output file requirements (names, location, size) for staging and allocation size directives.  The Transparent Cache \texttt{\#DW} directives simplifies the implementation for less technical users while still providing improved filesystem performance.
 
 Cray's development of Transparent Cache was still ongoing and was not yet a released product that could be installed without risk of destabilizing the production system (Cori). Like many sites, NERSC maintains a TDS for each of the main production systems (Test and Development System).  The initial installation was then targeted for the TDS.  The TDS (Gerty) has a minimalistic DataWarp configuration comprising two DW-servers with 12TB of SSD.  The software revisions on  the TDS mirror those of the main system.
 
-The primary purpose of the TDS is to support the installation of new OS releases or patch sets prior to roll out onto Cori.  The installation of the pre-release of Transparent Cache would render this functionality ineffective due to the differences in the software levels and code differences (for example DVS). Therefore a plan was developed where both purposes could be served.  A snapshot of the TDS' current SMW filesystem (BTRFS) containing the base configuration sets (cfgsets) and images (P0 images) would be created to revert back to. The TC filesets were then applied to the TDS, images generated for each type of node and another BTRFS snapshot taken.  This would allow switching between snapshots, selecting which node image to boot (cnode update), and booting the TDS in either 'normal mode' or 'TC mode'.  Management and coordination of this activity is aided by a 'gitflow'-like environment as detailed in "Managing the SMW as a git Branch" - CUG2018 Jacobsen/Kleinman/Longley~\cite{cug_git_smw}. 
+The primary purpose of the TDS is to support the installation of new OS releases or patch sets prior to roll out onto Cori.  The installation of the pre-release of Transparent Cache would render this functionality ineffective due to the differences in the software levels and code differences (for example DVS). Therefore a plan was developed where both purposes could be served.  A snapshot of the TDS' current SMW filesystem (BTRFS) containing the base configuration sets (cfgsets) and images (P0 images) would be created to revert back to. The TC filesets were then applied to the TDS, images generated for each type of node and another BTRFS snapshot taken.  This would allow switching between snapshots, selecting which node image to boot (cnode update), and booting the TDS in either `normal mode' or `TC mode'.  Management and coordination of this activity is aided by a `gitflow'-like environment~\cite{cug_git_smw}. 
 
-After rebooting the TDS with the TC-images the DWS configuration had to be restored from a JSON backup due to the change in revision levels.  This involved two simple steps, one before updating and one after- using the "dwcli config" command with:
+After rebooting the TDS with the TC-images the DWS configuration had to be restored from a JSON backup due to the change in revision levels.  This involved two simple steps, one before updating and one after- using the ``dwcli config'' command with:
 \begin{enumerate}
 \item \textbf{backup} - backup node/pool configuration to stdout (json)
 \item \textbf{restore} - attempt to restore a previously saved configuration from stdin (json)
@@ -621,6 +621,162 @@ For our initial performance testing we used two plasma physics applications; \te
 \centering
 \includegraphics[width=\textwidth]{graphics/vpic}
 \caption{Initial performance results with \texttt{VPIC} and \texttt{BD-CATS}. Courtesy Glenn Lockwood, NERSC.\label{vpic}}
+\end{figure*}
+
+\subsection{Cray}
+
+As compared to the scratch data path, the transparent cache data path includes the additional \texttt{dcfs} layer.  To see the cost of this layer in the absence of write-back, we set up experiments with IOR comparing File Per Process (FPP) and Single Shared file (SSF) access patterns.
+
+All experiments were run on an internal XC system \emph{orion} targeting 4 DataWarp nodes.  Each DataWarp node had two Intel P3608 SSDs~\cite{intel-p3608}.  The \emph{orion} system was running prerelease CLE software.  While the DataWarp servers were dedicated to this benchmarking effort the compute and lustre environments were shared with other users.  Each DataWarp instance size was exactly 1TiB.
+
+Each IOR run consisted of 512 compute ranks spread across 32 compute nodes.  The compute node CPU types varied from run to run but were all Intel x86\_64 processors, including some KNL nodes.  All transfer sizes were 1MiB.  For the write phase an \texttt{fsync()} was performed at the end.  For the read and write tests, we used IOR's intra-test barrier option.  The aggregate quantity of data written was 388GiB for the scratch vs cache comparisons and 1TiB for the write-back thread count comparison.
+
+In \figurename~\ref{scratch_cache_fpp_compare} we plot IOR read and write performance for a FPP workload using the scratch data path (dashes) and cache data path (solid).  IOR reported 19,827.80 MB/sec for scratch write, and 28,921.43MB/sec for scratch read.  For the transparent cache data path, IOR reported 19,381.86MB/sec for write and 28,310.38MB/sec.  Comparing scratch to cache, cache was 2.2\% slower for writes and 2.1\% slower for reads.
+
+\begin{figure*}
+\centering
+\begin{tikzpicture}
+	\begin{axis}[
+		xlabel=Time (seconds),
+		ylabel=I/O Rate (MB/sec),
+		scaled ticks=false,
+		width=0.95\textwidth,
+		height=5cm,
+		grid=major,
+		xmin=0, ymin=0,
+%		enlargelimits=false,
+		every axis plot post/.append style={mark=none},
+		legend style={
+			font=\small,
+			cells={anchor=west},
+			legend pos=south west,
+		},
+	]
+	% FPP Scratch Write
+	\addlegendentry{FPP Scratch Write}
+	\addplot[blue, dashed] table {data/1m_512files_32nodes_280656.WriteRate.csv};
+	% FPP Scratch Read
+	\addlegendentry{FPP Scratch Read}
+	\addplot[red, dashed] table {data/1m_512files_32nodes_280656.ReadRate.csv};
+
+	% FPP Cache Write
+	\addlegendentry{FPP Cache Write}
+	\addplot[blue] table {data/1m_512files_32nodes_280649.WriteRate.csv};
+	% FPP Cache Read
+	\addlegendentry{FPP Cache Read}
+	\addplot[red] table {data/1m_512files_32nodes_280649.ReadRate.csv};
+	\end{axis}
+\end{tikzpicture}
+\caption{I/O rate comparison between scratch and cache with a File Per Process workload.\label{scratch_cache_fpp_compare}}
+\end{figure*}
+
+In \figurename~\ref{scratch_cache_ssf_compare} we plot IOR read and write performance for a SSF workload using the scratch data path (dashes) and cache data path (solid).  IOR reported 15,055.83MB/sec for scratch write, and 27,189.43MB/sec for scratch read.  For the transparent cache data path, IOR reported 13,040.54MB/sec for write and 24,503.36MB/sec for reads.  Comparing scratch to cache, cache was 13.4\% slower for writes and 9.9\% slower for reads.  The \texttt{dwfs} layer uses a sub-striping technique to improve SSF performance, but we have not yet tuned it for the transparent cache data path.  We believe this explains some of the performance difference.
+
+\begin{figure*}
+\centering
+\begin{tikzpicture}
+	\begin{axis}[
+		xlabel=Time (seconds),
+		ylabel=I/O Rate (MB/sec),
+		scaled ticks=false,
+		width=0.95\textwidth,
+		height=5cm,
+		grid=major,
+		xmin=0, ymin=0,
+%		enlargelimits=false,
+		every axis plot post/.append style={mark=none},
+		legend style={
+			font=\small,
+			cells={anchor=west},
+			legend pos=south west,
+		},
+	]
+	% SSF Scratch Write
+	\addlegendentry{SSF Scratch Write}
+	\addplot[blue, dashed] table {data/1m_512files_32nodes_280655.WriteRate.csv};
+	% SSF Scratch Read
+	\addlegendentry{SSF Scratch Read}
+	\addplot[red, dashed] table {data/1m_512files_32nodes_280655.ReadRate.csv};
+
+	% SSF Cache Write
+	\addlegendentry{SSF Cache Write}
+	\addplot[blue] table {data/1m_512files_32nodes_280641.WriteRate.csv};
+	% SSF Cache Read
+	\addlegendentry{SSF Cache Read}
+	\addplot[red] table {data/1m_512files_32nodes_280641.ReadRate.csv};
+	\end{axis}
+\end{tikzpicture}
+\caption{I/O rate comparison between scratch and cache with a Single Shared File workload.\label{scratch_cache_ssf_compare}}
+\end{figure*}
+
+
+%\begin{figure*}
+%\centering
+%\begin{tikzpicture}
+%	\begin{axis}[
+%		xlabel=Time (seconds),
+%		ylabel=I/O Rate (MB/sec),
+%		scaled ticks=false,
+%		width=0.95\textwidth,
+%		height=5cm,
+%		grid=major,
+%		xmin=0, ymin=0,
+%%		enlargelimits=false,
+%		every axis plot post/.append style={mark=none},
+%		legend style={
+%			font=\small,
+%			cells={anchor=west},
+%			legend pos=south west,
+%		},
+%	]
+%	% FPP cache Write 8threads
+%	\addlegendentry{FPP Cache Write 8threads}
+%	\addplot table {data/1m_512files_32nodes_280580.WriteRate.csv};
+%	% FPP Cache Write 1thread
+%	\addlegendentry{FPP Cache Write 1thread}
+%	\addplot table {data/1m_512files_32nodes_280612.WriteRate.csv};
+%	\end{axis}
+%\end{tikzpicture}
+%\caption{FPP writeback thread affect on IO.\label{xxx}}
+%\end{figure*}
+
+For transparent cache, automatic write-back begins once an internal high water mark is exceeded.  For the version of DataWarp used in benchmarking, this threshold is exceeded once 45\% of the data in \texttt{dcfs} is dirty.  In \figurename~\ref{fpp_cache_threads_compare} we compare the impact on performance for a FPP IO pattern when there are 1 thread per server performing write-back versus 8 threads per server performing write-back.  At approximately 23 seconds in both runs begin write-back of dirty data to \emph{orion}'s parallel filesystem.  When write-back occurs, these threads compute for CPU, SSD, and network resources and slow down write performance from an application's perspective.
+
+With only 1 write-back thread, once write-back begins performance degrades from about 20GB/sec to 18GB/sec.  At around 53 seconds application IO performance plummets to 2GB/sec and remains low until finishing up around 75 seconds later.  The SSD cache has filled up and the application's performance is now limited to how fast the one thread on each of the four DataWarp servers can write-back dirty data to the parallel filesystem.
+
+With 8 write-back threads, performance degrades down to around 14GB/sec.  Dirty data is more quickly moved to the parallel filesystem as compared to the 1 thread variant.  At around 71 seconds the application completes writing.  In this example, 8 threads were able to write-back enough dirty data to the parallel filesystem while the application was writing to the SSDs to prevent the application's performance from degrading even further as was seen in the 1 write-back thread example.
+
+\begin{figure*}
+\centering
+\begin{tikzpicture}
+	\begin{axis}[
+		xlabel=Time (seconds),
+		ylabel=I/O Rate (MB/sec),
+		scaled ticks=false,
+		width=0.95\textwidth,
+		height=5cm,
+		grid=major,
+		xmin=0, ymin=0, xmax=130,
+%		enlargelimits=false,
+		every axis plot post/.append style={mark=none},
+		legend style={
+			font=\small,
+			cells={anchor=west},
+			legend pos=south west,
+		},
+	]
+	% 280573
+	\addlegendentry{FPP Cache Write 8threads}
+	\addplot[blue] table {data/1m_512files_32nodes_280573.WriteRate.csv};
+	
+	
+	% 280610
+	\addlegendentry{FPP Cache Write 1thread}
+	\addplot[blue, dashed] table {data/1m_512files_32nodes_280610.WriteRate.csv};
+
+	\end{axis}
+\end{tikzpicture}
+\caption{I/O rate comparison in the presence of write-back with 1 or 8 write-back threads.\label{fpp_cache_threads_compare}}
 \end{figure*}
 
 \section{Future Work\label{sec_fw}}
@@ -638,7 +794,7 @@ The old transparent caching implementation exposed statistics or accounting data
 The default behavior for \texttt{close()} and \texttt{fsync()}-like operations in transparent caching is to sync all dirty data to the SSDs.  Allowing this behavior to be configurable, e.g., so that all dirty data is guaranteed to have been written to the PFS on successful completion, will allow for users to choose between speed of operation and having a simple method for guaranteeing durability of data.
 
 \section{Conclusion\label{sec_conc}}
-Cray's Datawarp BurstBuffer provides a scalable, highly performant I/O system for the challenges of science at scale.  Technically capable scientists can take full advantage of the raw performance delivered with a few carefully placed directives.  For those scientists that are not technically savvy the implementation of Transparent Cache allows them to implement most of the performance advantages easily into their scientific workflows without having to worry the details of specific stage-in and stage-out of their datasets.  As development of TC continues and its performance tuned the users will 'transparently' benefit without changes to their code or job workflow scripts.
+DataWarp provides a scalable, highly performant I/O system for the challenges of science at scale.  Technically capable scientists can take full advantage of the raw performance delivered with a few carefully placed job script directives and modifications.  For those scientists that are not technically savvy the new transparent cache data path gives them access to improved I/O performance by easily fitting in to their existing scientific workflows; no explicit stage-in or stage-out of their datasets is required.  As the transparent caching data path is tuned and matures, the performance gap between it and the scratch data path will narrow.  Other future work will help improve read-only workloads and give sophisticated users more control over their transparent cache data path.
 
 % use section* for acknowledgment
 \ifCLASSOPTIONcompsoc
