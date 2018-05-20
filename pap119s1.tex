@@ -688,7 +688,7 @@ In \figurename~\ref{scratch_cache_ssf_compare} we plot IOR read and write perfor
 		legend style={
 			font=\small,
 			cells={anchor=west},
-			legend pos=south west,
+			legend pos=north east,
 		},
 	]
 	% SSF Scratch Write
@@ -762,17 +762,17 @@ With 8 write-back threads, performance degrades down to around 14GB/sec.  Dirty 
 		legend style={
 			font=\small,
 			cells={anchor=west},
-			legend pos=south west,
+			legend pos=north east,
 		},
 	]
 	% 280573
-	\addlegendentry{FPP Cache Write 8threads}
+	\addlegendentry{FPP Cache Write 8 threads}
 	\addplot[blue] table {data/1m_512files_32nodes_280573.WriteRate.csv};
 	
 	
 	% 280610
-	\addlegendentry{FPP Cache Write 1thread}
-	\addplot[blue, dashed] table {data/1m_512files_32nodes_280610.WriteRate.csv};
+	\addlegendentry{FPP Cache Write 1 thread}
+	\addplot[green] table {data/1m_512files_32nodes_280610.WriteRate.csv};
 
 	\end{axis}
 \end{tikzpicture}
